@@ -54,7 +54,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: fm26
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODEL: llama3.2:3b
+      OLLAMA_MODEL: qwen2.5:7b
       PYTHONUNBUFFERED: "1"
     ports:
       - "8000:8000"
