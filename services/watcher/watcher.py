@@ -8,26 +8,25 @@ from pathlib import Path
 import pandas as pd
 import psycopg2
 import psycopg2.extras
-from dotenv import load_dotenv
 from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-
-EXPORT_DIR = Path("/mnt/c/Users/janni/Documents/Sports Interactive/Football Manager 26/FM26PlayerExport by vinteset/Exports CSV")
+EXPORT_DIR = Path(os.environ.get(
+    "EXPORT_DIR",
+    "/mnt/c/Users/janni/Documents/Sports Interactive/Football Manager 26/FM26PlayerExport by vinteset/Exports CSV",
+))
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "dbname": "fm26",
-    "user": "fm26",
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", "5432")),
+    "dbname": os.environ.get("POSTGRES_DB", "fm26"),
+    "user": os.environ.get("POSTGRES_USER", "fm26"),
     "password": os.environ["POSTGRES_PASSWORD"],
 }
 
 # --- Parsing: rå CSV-tekst -> rigtige typer -----------------------------
 
 def parse_decimal(val):
-    """'7,05' -> 7.05 (dansk komma til punktum)"""
     if pd.isna(val) or str(val).strip() in ("-", ""):
         return None
     try:
@@ -36,7 +35,6 @@ def parse_decimal(val):
         return None
 
 def parse_money(val):
-    """'3mio. kr/måned' -> 3000000.0, '80K kr/måned' -> 80000.0"""
     if pd.isna(val) or str(val).strip() in ("-", ""):
         return None
     m = re.match(r"([\d,]+)\s*(mio\.|K)?", str(val).strip())
@@ -50,7 +48,6 @@ def parse_money(val):
     return num
 
 def parse_value_range(val):
-    """'44mio. kr - 52mio. kr' -> (44000000.0, 52000000.0)"""
     if pd.isna(val) or str(val).strip() in ("-", ""):
         return None, None
     parts = str(val).split(" - ")
@@ -60,7 +57,6 @@ def parse_value_range(val):
     return v, v
 
 def parse_appearances(val):
-    """'31 (6)' -> (31, 6) = 31 kampe, 6 som indskifter"""
     if pd.isna(val) or str(val).strip() in ("-", ""):
         return None, None
     m = re.match(r"(\d+)(?:\s*\((\d+)\))?", str(val).strip())
@@ -69,7 +65,6 @@ def parse_appearances(val):
     return int(m.group(1)), int(m.group(2)) if m.group(2) else 0
 
 def parse_danish_date(val):
-    """'30/6/2034' -> date(2034, 6, 30)"""
     if pd.isna(val) or str(val).strip() in ("-", ""):
         return None
     try:
@@ -78,9 +73,6 @@ def parse_danish_date(val):
         return None
 
 def last_column_named(df, name):
-    """'Udløber' står to gange i eksporten - pandas omdøber nr. 2 til
-    'Udløber.1'. Vi vil have den SIDSTE (den ved siden af Løn/Evne =
-    kontraktudløb), ikke den midt i Frikøbsklausul-blokken."""
     matches = [c for c in df.columns if c == name or c.startswith(name + ".")]
     return matches[-1] if matches else None
 
@@ -100,8 +92,6 @@ def insert_players(df):
     for _, row in df.iterrows():
         value_low, value_high = parse_value_range(row.get("Transferværdi"))
         appearances, sub_appearances = parse_appearances(row.get("Optrædener"))
-
-        # Alt der ikke er eksplicit mappet, ender i attributes-JSONB'en
         extras = {c: (None if pd.isna(row[c]) else row[c]) for c in df.columns if c not in mapped}
 
         cur.execute(

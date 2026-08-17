@@ -12,6 +12,28 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fm26"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  watcher:
+    build: ./services/watcher
+    container_name: fm26_watcher
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      PYTHONUNBUFFERED: "1"
+      EXPORT_DIR: /data/export
+      POSTGRES_USER: fm26
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: fm26
+    volumes:
+      - "/mnt/c/Users/janni/Documents/Sports Interactive/Football Manager 26/FM26PlayerExport by vinteset/Exports CSV:/data/export:ro"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:
