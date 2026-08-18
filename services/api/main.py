@@ -20,17 +20,13 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 
 SYSTEM_PROMPT = (
     "You are an analytical assistant manager for a football club in "
-    "Football Manager 26. You give a holistic assessment of each player - "
-    "not just whether they should play more. Low appearances alone does "
-    "NOT automatically mean a player deserves more minutes. Weigh age, "
-    "ability ceiling, and squad standing together, not in isolation."
+    "Football Manager 26. A recommendation has already been computed for "
+    "you deterministically - your only job is to explain WHY it fits this "
+    "specific player, grounded in the exact data given. CRITICAL RULE: "
+    "only ever reference the exact attribute names, stat names, and values "
+    "explicitly given to you. Never mention an attribute, stat, or metric "
+    "that was not provided - not even a plausible-sounding one."
 )
-
-ASSESSMENTS = [
-    "Core player", "Promising talent", "Solid squad player",
-    "Underused - deserves a chance", "Below required standard",
-    "Exit candidate (loan or sale)",
-]
 
 ALL_ATTRIBUTES = [
     ("Indlæg", "Crossing"), ("Markering", "Marking"), ("Afslutning", "Finishing"),
@@ -64,15 +60,17 @@ POSITION_KEY_ATTRIBUTES = {
 }
 
 MATCH_CONTEXT = [
-    ("Kampens spiller", "Man of the Match count"),
-    ("Progressive afleveringer per 90", "Progressive Passes/90"),
-    ("Nøgleafleveringer", "Key Passes"),
-    ("Boldbesiddelse vundet per 90", "Possession Won/90"),
-    ("Højreben", "Right Foot"), ("Venstreben", "Left Foot"),
     ("Tilfredshed", "Happiness"),
     ("Tilfredshed med spilletid", "Playing Time Satisfaction"),
     ("Missede kampe i træk", "Consecutive matches NOT played"),
     ("Klar til at blive fritstillet", "Club marked as ready to release"),
+]
+
+PLAYER_BACKGROUND = [
+    ("Personlighed", "Personality"),
+    ("Spillertræk", "Traits"),
+    ("Lejestatus", "Loan status"),
+    ("Højde", "Height"),
 ]
 
 PAIRED_STATS = [
@@ -88,15 +86,63 @@ EXPECTATION_PAIRS = [
     ("Creativity vs xA", "xA", "Assists"),
 ]
 
-BENCHMARKS = {
-    "pass": [(65, "poor for professional level"), (75, "below average"), (85, "solid/good"), (999, "excellent, elite-level")],
-    "shot_conversion": [(8, "poor finishing"), (12, "average"), (18, "good"), (999, "excellent, elite finishing")],
-    "shot_accuracy": [(30, "below average"), (40, "average"), (50, "good"), (999, "excellent")],
-    "tackle": [(50, "poor - timing/positioning issues"), (60, "below average"), (70, "solid, above average"), (999, "excellent/elite")],
-    "aerial": [(45, "poor in the air"), (55, "below average"), (65, "average for the position"), (999, "strong to elite")],
+# Delte tier-labels på tværs af ALLE kategorier - samme resultat vises altid ens
+TIER_LABELS = ["poor", "below average", "good", "excellent"]
+
+BENCHMARK_THRESHOLDS = {
+    "pass": [65, 75, 85],
+    "shot_conversion": [8, 12, 18],
+    "shot_accuracy": [30, 40, 50],
+    "tackle": [50, 60, 70],
+    "aerial": [45, 55, 65],
 }
 
-MIN_SAMPLE_SIZE = 5  # kamp-statistikker med under dette antal forsøg ignoreres helt
+TIER_TO_STAT_MAGNITUDE = {0: 3.0, 1: 1.0, 2: 1.0, 3: 3.0}
+
+MIN_SAMPLE_SIZE = 5
+MIN_MINUTES_FOR_EXPECTATION = 90
+
+EXCEPTIONAL_THRESHOLD = 6.0
+POSITIVE_THRESHOLD = 2.0
+WEAK_THRESHOLD = 0.5
+
+RECOMMENDATIONS = {
+    ("Youth", "exceptional"): "Outstanding talent for his age - secure him a fixed place in the development plan, possibly ready for the first team sooner than usual.",
+    ("Youth", "positive"): "Strong talent for his age - prioritize development playing time.",
+    ("Youth", "weak_positive"): "Promising trend, but not yet conclusive - give a bit more playing time to confirm the direction.",
+    ("Youth", "mixed"): "Mixed profile, natural for his age - monitor without urgent action.",
+    ("Youth", "weak_negative"): "Weaknesses slightly outweigh strengths - worth following, not yet a concern.",
+    ("Youth", "negative"): "Weaknesses still outweigh strengths - monitor development closely, avoid forcing playing time.",
+    ("Youth", "severe_negative"): "Significantly below standard even for his age - reconsider whether he belongs in the academy long-term.",
+    ("Youth", "insufficient"): "Not enough data for a reliable assessment - needs more playing time or scouting.",
+
+    ("Early prime", "exceptional"): "Exceptional level for his age - future key player, give him responsibility now.",
+    ("Early prime", "positive"): "Solid and improving level - give more playing time, looks ready for a bigger role.",
+    ("Early prime", "weak_positive"): "Positive trend, but not conclusive - worth investing more playing time in.",
+    ("Early prime", "mixed"): "Reliable depth without a clear strength yet - no urgent action needed.",
+    ("Early prime", "weak_negative"): "Weaknesses slightly outweigh strengths - monitor, no need to rush.",
+    ("Early prime", "negative"): "Doesn't match the squad's level right now - consider a loan for playing time elsewhere.",
+    ("Early prime", "severe_negative"): "Significantly below standard at this stage - loan or sale should be seriously considered.",
+    ("Early prime", "insufficient"): "Not enough data for a reliable assessment - continue monitoring development.",
+
+    ("Prime age", "exceptional"): "Outstanding level in his prime - one of the squad's most important players, should be protected.",
+    ("Prime age", "positive"): "Strong player in his prime - should be prioritized higher or retained.",
+    ("Prime age", "weak_positive"): "Solid, with signs of more - may deserve a bigger role, not a clear upgrade yet.",
+    ("Prime age", "mixed"): "Reliable, but not standout - fair rotation player.",
+    ("Prime age", "weak_negative"): "Slightly below standard in his prime - worth watching, not urgent.",
+    ("Prime age", "negative"): "In his prime, but not matching the required level - consider a loan/sale, limited time left to improve.",
+    ("Prime age", "severe_negative"): "Significantly below standard mid-career - likely not part of the future.",
+    ("Prime age", "insufficient"): "Not enough data for a reliable assessment - should be clarified quickly.",
+
+    ("Veteran", "exceptional"): "Extraordinary level for his age - still a genuine key player, value him.",
+    ("Veteran", "positive"): "Still performing above standard - valuable rotation/mentor player.",
+    ("Veteran", "weak_positive"): "Still holding up fine, without being standout - fits well as experienced depth.",
+    ("Veteran", "mixed"): "Mixed profile - use tactically as rotation, not a guaranteed starter.",
+    ("Veteran", "weak_negative"): "Early signs of declining level - keep an eye on it, plan a successor.",
+    ("Veteran", "negative"): "Past his best with no development potential left - consider contract termination, sale, or loan.",
+    ("Veteran", "severe_negative"): "Significantly below standard with no way back - contract termination or exit should be prioritized.",
+    ("Veteran", "insufficient"): "Not enough data for a reliable assessment - worth clarifying quickly given his age.",
+}
 
 
 def get_conn():
@@ -127,12 +173,14 @@ def parse_percent(v):
 
 
 def benchmark_tier(category, pct):
+    """Bruger nu delte TIER_LABELS - samme tier giver altid samme tekst, uanset kategori."""
     if pct is None:
         return None, None
-    for i, (upper, label) in enumerate(BENCHMARKS[category]):
+    thresholds = BENCHMARK_THRESHOLDS[category]
+    for i, upper in enumerate(thresholds):
         if pct < upper:
-            return i, label
-    return 3, "excellent"
+            return i, TIER_LABELS[i]
+    return 3, TIER_LABELS[3]
 
 
 def classify_position(pos):
@@ -157,6 +205,25 @@ def classify_position(pos):
     if primary.startswith("F"):
         return "DEF"
     return "MID"
+
+
+def enrich_extras(r):
+    extras = dict(r["attributes"] or {})
+    extras["Mål"] = r["goals"]
+    extras["Assists"] = r["assists"]
+    return extras
+
+
+def get_age_band(age):
+    if age is None:
+        return "Unknown"
+    if age < 20:
+        return "Youth"
+    if age <= 23:
+        return "Early prime"
+    if age <= 29:
+        return "Prime age"
+    return "Veteran"
 
 
 def squad_averages_by_position(conn, export_id):
@@ -211,27 +278,7 @@ def unload_model():
         pass
 
 
-def format_all_paired_stats(extras):
-    """Kamp-statistikker med for få forsøg (< MIN_SAMPLE_SIZE) ignoreres helt - ikke bare nedvægtet."""
-    lines = []
-    for label, pct_key, num_key, den_key, category in PAIRED_STATS:
-        pct = parse_percent(extras.get(pct_key))
-        num, den = extras.get(num_key), try_float(extras.get(den_key))
-        if pct is None or not den or den < MIN_SAMPLE_SIZE:
-            continue
-        _, verdict = benchmark_tier(category, pct)
-        lines.append(f"{label}: {pct}% ({num}/{int(den)} attempted) - {verdict}")
-    for label, exp_key, actual_key in EXPECTATION_PAIRS:
-        exp, actual = try_float(extras.get(exp_key)), try_float(extras.get(actual_key))
-        if exp is None or actual is None:
-            continue
-        diff = actual - exp
-        perf = "overperforming" if diff > 0.5 else "underperforming" if diff < -0.5 else "in line with expectation"
-        lines.append(f"{label}: {actual} actual vs {exp} expected ({perf})")
-    return lines
-
-
-def pick_standout_attribute(extras, cat_avgs, category):
+def pick_attribute(extras, cat_avgs, category, direction):
     relevant_keys = set(POSITION_KEY_ATTRIBUTES[category])
     best = None
     for dk, en in ALL_ATTRIBUTES:
@@ -241,18 +288,22 @@ def pick_standout_attribute(extras, cat_avgs, category):
         avg = cat_avgs.get(dk)
         if val is None or avg is None:
             continue
-        dev = abs(val - avg)
-        if best is None or dev > best[0]:
-            best = (dev, en, val, avg)
+        dev = val - avg
+        if direction == "positive" and dev <= 0:
+            continue
+        if direction == "negative" and dev >= 0:
+            continue
+        magnitude = abs(dev)
+        if best is None or magnitude > best[0]:
+            best = (magnitude, en, val, avg, dev)
     if not best:
-        return "No key attribute to present"
-    dev, en, val, avg = best
-    direction = "above" if val >= avg else "below"
-    return f"{en}={val} ({dev:.1f} {direction} {category} avg {avg})"
+        return f"No notable {direction} attribute in position-relevant set", 0.0
+    magnitude, en, val, avg, dev = best
+    word = "above" if dev > 0 else "below"
+    return f"{en}={val} ({magnitude:.1f} {word} {category} avg {avg})", magnitude
 
 
-def pick_standout_context(extras):
-    """Ignorerer small samples helt. Er der intet tilbage, sendes en klar besked frem for at gætte."""
+def pick_context_stat(extras, direction):
     candidates = []
     for label, pct_key, num_key, den_key, category in PAIRED_STATS:
         pct = parse_percent(extras.get(pct_key))
@@ -260,68 +311,96 @@ def pick_standout_context(extras):
         if pct is None or not den or den < MIN_SAMPLE_SIZE:
             continue
         tier, verdict = benchmark_tier(category, pct)
-        severity = 2 if tier in (0, 3) else 0
-        candidates.append((severity, f"{label}: {pct}% ({num}/{int(den)} attempted) - {verdict}"))
-    for label, exp_key, actual_key in EXPECTATION_PAIRS:
-        exp, actual = try_float(extras.get(exp_key)), try_float(extras.get(actual_key))
-        if exp is None or actual is None:
+        if direction == "positive" and tier not in (2, 3):
             continue
-        diff = actual - exp
-        perf = "overperforming" if diff > 0.5 else "underperforming" if diff < -0.5 else "in line with expectation"
-        severity = 2 if perf != "in line with expectation" else 0
-        candidates.append((severity, f"{label}: {actual} actual vs {exp} expected ({perf})"))
+        if direction == "negative" and tier not in (0, 1):
+            continue
+        weight = TIER_TO_STAT_MAGNITUDE[tier]
+        candidates.append((weight, f"{label}: {pct}% ({num}/{int(den)} attempted) - {verdict}"))
+
+    minutes = try_float(extras.get("Minutter"))
+    if minutes is not None and minutes >= MIN_MINUTES_FOR_EXPECTATION:
+        for label, exp_key, actual_key in EXPECTATION_PAIRS:
+            exp, actual = try_float(extras.get(exp_key)), try_float(extras.get(actual_key))
+            if exp is None or actual is None:
+                continue
+            diff = actual - exp
+            if direction == "positive" and diff <= 0.5:
+                continue
+            if direction == "negative" and diff >= -0.5:
+                continue
+            perf = "overperforming" if diff > 0.5 else "underperforming"
+            candidates.append((abs(diff), f"{label}: {actual} actual vs {exp} expected ({perf})"))
+
     if not candidates:
-        return "No key match stats to present"
+        return f"No notable {direction} match stat to present", 0.0
     candidates.sort(key=lambda c: c[0], reverse=True)
-    return candidates[0][1]
+    return candidates[0][1], candidates[0][0]
 
 
-def build_prompt(r, cat_avgs, category, club_name, standout_attr, standout_context):
+def compute_combined_signal(attr_pos, attr_neg, stat_pos, stat_neg):
+    attribute_net = attr_pos - attr_neg
+    stat_net = stat_pos - stat_neg
+    combined_net = attribute_net + stat_net
+
+    if attr_pos == 0 and attr_neg == 0 and stat_pos == 0 and stat_neg == 0:
+        state = "insufficient"
+    elif combined_net > EXCEPTIONAL_THRESHOLD:
+        state = "exceptional"
+    elif combined_net > POSITIVE_THRESHOLD:
+        state = "positive"
+    elif combined_net > WEAK_THRESHOLD:
+        state = "weak_positive"
+    elif combined_net >= -WEAK_THRESHOLD:
+        state = "mixed"
+    elif combined_net >= -POSITIVE_THRESHOLD:
+        state = "weak_negative"
+    elif combined_net >= -EXCEPTIONAL_THRESHOLD:
+        state = "negative"
+    else:
+        state = "severe_negative"
+
+    return state, attribute_net, stat_net
+
+
+def build_prompt(r, extras, club_name, pos_attr, neg_attr, pos_stat, neg_stat, age_band, tier, attribute_net, stat_net, recommendation):
+    background_parts = [f"{en}={extras.get(dk)}" for dk, en in PLAYER_BACKGROUND if extras.get(dk) not in (None, "")]
+
     core = (
         f"{r['position']}, age {r['age']}, {r['appearances'] or 0} apps "
-        f"({r['sub_appearances'] or 0} sub), {r['goals'] or 0} goals, "
-        f"{r['assists'] or 0} assists, rating {r['avg_rating']}, "
-        f"status {r['squad_status']}, CA {r['current_ability']}/PA {r['potential_ability']}, "
-        f"contract {r['contract_expiry']}"
+        f"({r['sub_appearances'] or 0} sub, {extras.get('Minutter')} minutes), "
+        f"{r['goals'] or 0} goals, {r['assists'] or 0} assists, rating {r['avg_rating']}, "
+        f"status {r['squad_status']}, contract {r['contract_expiry']}, "
+        f"club {club_name}, {', '.join(background_parts)}"
     )
-    extras = r["attributes"] or {}
-    relevant_keys = set(POSITION_KEY_ATTRIBUTES[category])
-
-    fm_parts = []
-    for dk, en in ALL_ATTRIBUTES:
-        if dk not in relevant_keys:
-            continue
-        val = extras.get(dk)
-        if val in (None, ""):
-            continue
-        avg = cat_avgs.get(dk)
-        fm_parts.append(f"{en}={val} ({category} avg {avg})" if avg is not None and try_float(val) is not None else f"{en}={val}")
 
     context_parts = [f"{en}={extras.get(dk)}" for dk, en in MATCH_CONTEXT if extras.get(dk) not in (None, "")]
-    all_stats = format_all_paired_stats(extras)
 
-    return f"""Club: {club_name}
-Player data: {core}
-Position group: {category}
-Position-relevant attributes only (1-20 scale): {', '.join(fm_parts)}
+    divergence_note = ""
+    if (attribute_net > 0.5 and stat_net < -0.5) or (attribute_net < -0.5 and stat_net > 0.5):
+        divergence_note = (
+            "\n\nNOTE: The attribute signal and match stat signal point in DIFFERENT "
+            "directions for this player. You MUST explicitly call this out in your "
+            "reason - e.g. 'young player with strong underlying ability, but "
+            "underperforming on [the specific stat given]', or the reverse."
+        )
+
+    return f"""Player data: {core}
 Match context: {', '.join(context_parts)}
-Performance stats (min. {MIN_SAMPLE_SIZE} attempts, benchmarked against real professional football standards): {'; '.join(all_stats) if all_stats else 'none meet the minimum sample size'}
 
-Assessment categories: {', '.join(ASSESSMENTS)}
+Age band: {age_band}
+Signal tier: {tier}
+Positive attribute (strongest, position-relevant): {pos_attr}
+Negative attribute (weakest, position-relevant): {neg_attr}
+Positive match stat: {pos_stat}
+Negative match stat: {neg_stat}
+{divergence_note}
 
-Pre-selected standout data (computed, not your choice - use these directly):
-- Standout position-relevant attribute (largest deviation from {category} average): {standout_attr}
-- Standout performance stat (most extreme benchmark result): {standout_context}
-
-Important: A player with low appearances is not automatically a development
-case. Check age vs. CA/PA gap, consecutive matches not played, and whether
-the club has marked them ready for release before concluding they deserve
-more playing time.
+RECOMMENDATION (already decided, computed - do not choose a different one): "{recommendation}"
 
 Respond with ONLY this JSON object, nothing else:
 {{
-  "assessment": "<one of: {', '.join(ASSESSMENTS)}>",
-  "reason": "<max 30 words. Must explain the assessment using the two standout data points given above, in your own words.>"
+  "reason": "<max 50 words. Explain WHY the recommendation above fits this specific player. Reference the exact positive and negative data points given. If attribute and match stat signals diverge (see note above if present), explicitly say so.>"
 }}"""
 
 
@@ -366,38 +445,46 @@ def rotation_candidates(limit: int = 8):
 
     results = []
     for r in rows:
-        extras = r["attributes"] or {}
+        extras = enrich_extras(r)
         category = classify_position(r["position"])
         cat_avgs = avgs_by_position[category]
 
-        standout_attr = pick_standout_attribute(extras, cat_avgs, category)
-        standout_context = pick_standout_context(extras)
+        pos_attr, attr_pos_mag = pick_attribute(extras, cat_avgs, category, "positive")
+        neg_attr, attr_neg_mag = pick_attribute(extras, cat_avgs, category, "negative")
+        pos_stat, stat_pos_mag = pick_context_stat(extras, "positive")
+        neg_stat, stat_neg_mag = pick_context_stat(extras, "negative")
+        age_band = get_age_band(r["age"])
 
-        prompt = build_prompt(r, cat_avgs, category, club_name, standout_attr, standout_context)
+        state, attribute_net, stat_net = compute_combined_signal(
+            attr_pos_mag, attr_neg_mag, stat_pos_mag, stat_neg_mag
+        )
+        recommendation = RECOMMENDATIONS[(age_band, state)]
+
+        prompt = build_prompt(r, extras, club_name, pos_attr, neg_attr, pos_stat, neg_stat,
+                               age_band, state, attribute_net, stat_net, recommendation)
         raw = call_ollama(prompt)
         try:
             parsed = json.loads(raw)
-            assessment = str(parsed.get("assessment", "")).strip()
             reason = str(parsed.get("reason", "")).strip()
         except (json.JSONDecodeError, AttributeError):
-            assessment, reason = "", raw
-
-        if assessment not in ASSESSMENTS:
-            assessment = f"[ukendt kategori: {assessment}]" if assessment else "[uventet svar - se raw]"
-            reason = raw if not reason else reason
+            reason = raw
 
         results.append({
             "name": r["name"],
             "age": r["age"],
+            "age_band": age_band,
+            "minutes_played": extras.get("Minutter"),
+            "club": extras.get("Klub"),
             "nation": r["nation"],
             "position": r["position"],
-            "CA": r["current_ability"],
-            "PA": r["potential_ability"],
             "Agreed squad role": extras.get("Spilletid"),
             "Actual squad role": extras.get("Faktisk spilletid"),
-            "assessment": assessment,
-            "Key attribute": standout_attr,
-            "Key match stat": standout_context,
+            "tier": state,
+            "recommendation": recommendation,
+            "Positive key attribute": pos_attr,
+            "Negative key attribute": neg_attr,
+            "Positive key match stat": pos_stat,
+            "Negative key match stat": neg_stat,
             "reason": reason,
         })
 
